@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>节律敲击评估</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 2em; }
+    #tap-area { width: 90vw; height: 60vh; background: #e0e0e0; display: flex; align-items: center; justify-content: center; border-radius: 20px; margin-bottom: 1em; font-size: 1.5em; cursor: pointer; }
+    button { padding: 1em 2em; font-size: 1.2em; margin-bottom: 1em; margin-right: 0.5em; }
+    table { border-collapse: collapse; margin-top: 1em; }
+    th, td { border: 1px solid #999; padding: 0.5em 1em; text-align: center; }
+    #mode-buttons { display: flex; gap: 1em; margin-bottom: 1em; }
+    #info { margin-bottom: 1em; }
+  </style>
+</head>
+<body>
+  <h1>节律敲击评估</h1>
+
+  <div id="info">
+    <label for="name">姓名：</label>
+    <input type="text" id="name" placeholder="请输入姓名">
+  </div>
+
+  <div id="mode-buttons">
+    <button id="fast-mode">快速模式</button>
+    <button id="medium-mode">中速模式</button>
+    <button id="download-btn">导出结果</button>
+  </div>
+
+  <div id="tap-area">点击此处跟节奏敲击</div>
+  <div id="result"></div>
+
+  <audio id="metronome" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg"></audio>
+
+  <script>
+    const metronome = document.getElementById('metronome');
+    const tapArea = document.getElementById('tap-area');
+    const fastBtn = document.getElementById('fast-mode');
+    const mediumBtn = document.getElementById('medium-mode');
+    const downloadBtn = document.getElementById('download-btn');
+    const resultDiv = document.getElementById('result');
+    const nameInput = document.getElementById('name');
+
+    let startTime = null;
+    let tapTimes = [];
+    let interval = 300;
+    let timer = null;
+    let beatTimes = [];
+    let beatCount = 20;
+    let lastResultCSV = '';
+    let testActive = false;
+    let subjectID = '';
+
+    function generateUUID() {
+      return 'xxxx-4xxx-yxxx'.replace(/[xy]/g, function (c) {
+        const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+
+    function generateResult() {
+      if (beatTimes.length >= beatCount && tapTimes.length > 0) {
+        const rows = [['Tap Time (ms)', 'Offset (ms)', 'Beat Index']];
+        const validOffsets = [];
+        let tableHTML = '<table><tr><th>Tap Time (ms)</th><th>Offset (ms)</th><th>Beat Index</th></tr>';
+
+        tapTimes.forEach(tap => {
+          const closestBeat = beatTimes.reduce((prev, curr) => Math.abs(curr - tap) < Math.abs(prev - tap) ? curr : prev);
+          const beatIndex = beatTimes.indexOf(closestBeat);
+          const offset = tap - closestBeat;
+          rows.push([tap.toFixed(0), offset.toFixed(1), beatIndex]);
+          tableHTML += `<tr><td>${tap.toFixed(0)}</td><td>${offset.toFixed(1)}</td><td>${beatIndex}</td></tr>`;
+          if (beatIndex >= 4) {
+            validOffsets.push(offset);
+          }
+        });
+
+        let mean = 0, sd = 0;
+        if (validOffsets.length > 0) {
+          mean = validOffsets.reduce((a, b) => a + b, 0) / validOffsets.length;
+          sd = Math.sqrt(validOffsets.reduce((a, b) => a + (b - mean) ** 2, 0) / validOffsets.length);
+        }
+
+        tableHTML += `<tr><td colspan="3"><strong>平均偏移（第5次开始）: ${mean.toFixed(1)} ms</strong></td></tr>`;
+        tableHTML += `<tr><td colspan="3"><strong>标准差: ${sd.toFixed(1)} ms</strong></td></tr>`;
+        tableHTML += '</table>';
+
+        lastResultCSV = rows.map(row => row.join(',')).join('\n');
+        resultDiv.innerHTML = tableHTML;
+        alert('结果已生成，可导出');
+      }
+    }
+
+    function startTest(mode) {
+      if (!nameInput.value.trim()) {
+        alert('请填写姓名后再开始测试');
+        return;
+      }
+
+      tapTimes = [];
+      beatTimes = [];
+      resultDiv.innerHTML = '';
+      lastResultCSV = '';
+      let count = 0;
+      startTime = performance.now();
+      testActive = true;
+      subjectID = generateUUID();
+
+      if (mode === 'fast') {
+        interval = 300;
+      } else if (mode === 'medium') {
+        interval = 400;
+      }
+
+      function playBeat() {
+        const now = performance.now();
+        metronome.currentTime = 0;
+        metronome.play();
+        beatTimes.push(now);
+        count++;
+        if (count >= beatCount) {
+          clearInterval(timer);
+          testActive = false;
+          generateResult();
+        }
+      }
+
+      playBeat();
+      timer = setInterval(playBeat, interval);
+    }
+
+    tapArea.addEventListener('pointerdown', () => {
+      if (!testActive) return;
+      const tapTime = performance.now();
+      tapTimes.push(tapTime);
+    });
+
+    fastBtn.addEventListener('click', () => startTest('fast'));
+    mediumBtn.addEventListener('click', () => startTest('medium'));
+
+    window.addEventListener('beforeunload', () => {
+      clearInterval(timer);
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      if (!lastResultCSV) return alert("暂无结果可导出");
+      const name = nameInput.value.trim().replace(/[^a-zA-Z0-9一-龥]/g, '_');
+      const filename = `${subjectID}_${name}.csv`;
+      const blob = new Blob([lastResultCSV], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      alert('文件保存成功：' + filename);
+    });
+  </script>
+</body>
+</html>
